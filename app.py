@@ -125,7 +125,17 @@ def sessions():
 
     return jsonify(data)
 
+@app.route("/session/<int:training_id>/streams")
+def session_streams(training_id):
+    data, error = nolio_get(
+        "/api/get/training/streams/",
+        params={"id": training_id}
+    )
 
+    if error:
+        return error
+
+    return jsonify(data)
 if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
