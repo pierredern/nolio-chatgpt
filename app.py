@@ -681,25 +681,24 @@ def analyse_derniere_seance():
     # On vérifiera ensuite l'ordre exact renvoyé par Nolio.
     # --------------------------------------------------------
 
-    training = trainings[0]
+training = trainings[0]
 
-    if not isinstance(training, dict):
-        return jsonify({
-            "error": "Format de séance inattendu.",
-            "training": training
-        }), 500
-
+if not isinstance(training, dict):
+    return jsonify({
+        "error": "Format de séance inattendu.",
+        "training": training
+    }), 500
 
 training_id = training.get("nolio_id")
 
 if not training_id:
     training_id = training.get("id")
 
-    if not training_id:
-        return jsonify({
-            "error": "Impossible de trouver l'identifiant de la séance.",
-            "training": training
-        }), 500
+if not training_id:
+    return jsonify({
+        "error": "Impossible de trouver l'identifiant de la séance.",
+        "training": training
+    }), 500
 
     # --------------------------------------------------------
     # 2. Récupérer les streams
