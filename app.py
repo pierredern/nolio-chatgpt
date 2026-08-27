@@ -66,7 +66,6 @@ def home():
 
 @app.route("/login")
 def login():
-
     state = secrets.token_urlsafe(32)
 
     session["oauth_state"] = state
@@ -88,9 +87,7 @@ def login():
 
 @app.route("/callback")
 def callback():
-
     received_state = request.args.get("state")
-
     saved_state = session.get("oauth_state")
 
     if received_state != saved_state:
@@ -146,7 +143,6 @@ def callback():
 # ============================================================
 
 def refresh_access_token():
-
     refresh_token = session.get("refresh_token")
 
     if not refresh_token:
@@ -171,7 +167,6 @@ def refresh_access_token():
     if response.status_code != 200:
         session.pop("access_token", None)
         session.pop("refresh_token", None)
-
         return False
 
     tokens = response.json()
@@ -185,8 +180,6 @@ def refresh_access_token():
 
     session["access_token"] = access_token
 
-    # Certains systèmes OAuth renvoient un nouveau refresh token.
-    # S'il n'est pas renvoyé, on conserve l'ancien.
     if new_refresh_token:
         session["refresh_token"] = new_refresh_token
 
@@ -202,9 +195,9 @@ def nolio_get(path, params=None):
     Effectue une requête GET vers Nolio.
 
     Si l'access_token est expiré :
-    1. on utilise le refresh_token ;
-    2. on récupère un nouveau access_token ;
-    3. on rejoue automatiquement la requête.
+    1. refresh du token ;
+    2. nouvelle requête ;
+    3. retour du résultat.
     """
 
     access_token = session.get("access_token")
@@ -221,15 +214,9 @@ def nolio_get(path, params=None):
         timeout=30,
     )
 
-    # --------------------------------------------------------
-    # Access token expiré
-    # --------------------------------------------------------
-
     if response.status_code == 401:
 
-        refreshed = refresh_access_token()
-
-        if not refreshed:
+        if not refresh_access_token():
             return None, redirect("/login")
 
         access_token = session.get("access_token")
@@ -249,12 +236,11 @@ def nolio_get(path, params=None):
 
 
 # ============================================================
-# PROFIL UTILISATEUR
+# PROFIL
 # ============================================================
 
 @app.route("/user")
 def user():
-
     data, error = nolio_get(
         "/api/get/user/"
     )
@@ -266,12 +252,11 @@ def user():
 
 
 # ============================================================
-# LISTE DES SÉANCES
+# SÉANCES
 # ============================================================
 
 @app.route("/sessions")
 def sessions():
-
     data, error = nolio_get(
         "/api/get/training/",
         params={
@@ -291,7 +276,6 @@ def sessions():
 
 @app.route("/session/<int:training_id>/streams")
 def session_streams(training_id):
-
     data, error = nolio_get(
         "/api/get/training/streams/",
         params={
@@ -306,76 +290,12 @@ def session_streams(training_id):
 
 
 # ============================================================
-# OUTILS D'ANALYSE
-# ============================================================
-
-def flatten_streams(data):
-    """
-    Transforme différentes structures possibles de réponse
-    Nolio en dictionnaire de streams.
-
-    Exemple :
-
-    {
-        "stream_watts": [...],
-        "stream_heartrate": [...],
-        "stream_cadence": [...]
-    }
-    """
-
-    if isinstance(data, dict):
-
-        streams = {}
-
-        # ----------------------------------------------------
-        # Les streams sont directement dans le dictionnaire
-        # ----------------------------------------------------
-
-        for key, value in data.items():
-
-            if key.startswith("stream_"):
-                streams[key] = value
-
-        if streams:
-            return streams
-
-        # ----------------------------------------------------
-        # Recherche récursive
-        # ----------------------------------------------------
-
-        for value in data.values():
-
-            result = flatten_streams(value)
-
-            if result:
-                return result
-
-    elif isinstance(data, list):
-
-        streams = {}
-
-        for item in data:
-
-            if isinstance(item, dict):
-
-                for key, value in item.items():
-
-                    if key.startswith("stream_"):
-                        streams[key] = value
-
-        if streams:
-            return streams
-
-    return {}
-
-
-# ============================================================
-# NETTOYAGE DES DONNÉES
+# NETTOYAGE DES NOMBRES
 # ============================================================
 
 def clean_numbers(values):
     """
-    Transforme une série en liste de nombres valides.
+    Transforme une série de valeurs en nombres valides.
     """
 
     if not isinstance(values, list):
@@ -386,25 +306,205 @@ def clean_numbers(values):
     for value in values:
 
         try:
-
             number = float(value)
 
             if math.isfinite(number):
                 cleaned.append(number)
 
         except (TypeError, ValueError):
-
             continue
 
     return cleaned
 
 
 # ============================================================
-# MOYENNE
+# NORMALISATION DES STREAMS
+# ============================================================
+
+def normalize_stream_key(key):
+    """
+    Transforme le nom d'un stream en clé normalisée.
+    """
+
+    text = str(key).lower().strip()
+
+    # Remplacement de caractères
+    replacements = {
+        "_": "",
+        "-": "",
+        " ": "",
+        "é": "e",
+        "è": "e",
+        "ê": "e",
+        "ë": "e",
+        "à": "a",
+        "â": "a",
+        "ä": "a",
+        "î": "i",
+        "ï": "i",
+        "ô": "o",
+        "ö": "o",
+        "ù": "u",
+        "û": "u",
+        "ü": "u",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return text
+
+
+def identify_stream(key):
+    """
+    Identifie le type d'un stream à partir de son nom.
+    """
+
+    normalized = normalize_stream_key(key)
+
+    # --------------------------------------------------------
+    # Fréquence cardiaque
+    # --------------------------------------------------------
+
+    if (
+        "heartrate" in normalized
+        or "heart" in normalized
+        or "frequencecardiaque" in normalized
+        or "frequence" in normalized
+        or "cardiaque" in normalized
+    ):
+        return "stream_heartrate"
+
+    # --------------------------------------------------------
+    # Puissance
+    # --------------------------------------------------------
+
+    if (
+        "watt" in normalized
+        or "power" in normalized
+        or "puissance" in normalized
+    ):
+        return "stream_watts"
+
+    # --------------------------------------------------------
+    # Cadence
+    # --------------------------------------------------------
+
+    if "cadence" in normalized:
+        return "stream_cadence"
+
+    # --------------------------------------------------------
+    # Couple
+    # --------------------------------------------------------
+
+    if (
+        "torque" in normalized
+        or "couple" in normalized
+    ):
+        return "stream_torque"
+
+    # --------------------------------------------------------
+    # Allure
+    # --------------------------------------------------------
+
+    if (
+        "pace" in normalized
+        or "allure" in normalized
+    ):
+        return "stream_pace"
+
+    # --------------------------------------------------------
+    # Altitude
+    # --------------------------------------------------------
+
+    if (
+        "altitude" in normalized
+        or "elevation" in normalized
+    ):
+        return "stream_altitude"
+
+    # --------------------------------------------------------
+    # Distance
+    # --------------------------------------------------------
+
+    if "distance" in normalized:
+        return "stream_distance"
+
+    # --------------------------------------------------------
+    # Temps
+    # --------------------------------------------------------
+
+    if (
+        normalized == "time"
+        or "streamtime" in normalized
+        or normalized.endswith("time")
+        or "temps" in normalized
+    ):
+        return "stream_time"
+
+    return None
+
+
+def flatten_streams(data):
+    """
+    Recherche récursivement les streams dans la réponse Nolio
+    et les convertit vers des noms internes standardisés.
+    """
+
+    streams = {}
+
+    # --------------------------------------------------------
+    # Dictionnaire
+    # --------------------------------------------------------
+
+    if isinstance(data, dict):
+
+        for key, value in data.items():
+
+            stream_name = identify_stream(key)
+
+            if stream_name and isinstance(value, list):
+
+                streams[stream_name] = value
+
+        # Si certains streams ont été trouvés, on continue
+        # quand même la recherche récursive pour récupérer
+        # d'autres streams éventuels.
+
+        for value in data.values():
+
+            if isinstance(value, (dict, list)):
+
+                nested = flatten_streams(value)
+
+                for key, nested_value in nested.items():
+
+                    if key not in streams:
+                        streams[key] = nested_value
+
+    # --------------------------------------------------------
+    # Liste
+    # --------------------------------------------------------
+
+    elif isinstance(data, list):
+
+        for item in data:
+
+            nested = flatten_streams(item)
+
+            for key, nested_value in nested.items():
+
+                if key not in streams:
+                    streams[key] = nested_value
+
+    return streams
+
+
+# ============================================================
+# STATISTIQUES
 # ============================================================
 
 def average(values):
-
     values = clean_numbers(values)
 
     if not values:
@@ -413,12 +513,7 @@ def average(values):
     return round(mean(values), 1)
 
 
-# ============================================================
-# MAXIMUM
-# ============================================================
-
 def maximum(values):
-
     values = clean_numbers(values)
 
     if not values:
@@ -427,12 +522,7 @@ def maximum(values):
     return round(max(values), 1)
 
 
-# ============================================================
-# MINIMUM
-# ============================================================
-
 def minimum(values):
-
     values = clean_numbers(values)
 
     if not values:
@@ -441,40 +531,48 @@ def minimum(values):
     return round(min(values), 1)
 
 
-# ============================================================
-# PERCENTILE
-# ============================================================
-
 def percentile(values, percentage):
     """
-    Calcul simple d'un percentile.
-
-    percentage :
-        0.95 = 95e percentile
+    Calcul d'un percentile sans dépendance externe.
     """
 
-    values = sorted(clean_numbers(values))
+    values = sorted(
+        clean_numbers(values)
+    )
 
     if not values:
         return None
 
-    index = (len(values) - 1) * percentage
+    index = (
+        len(values) - 1
+    ) * percentage
 
     lower = math.floor(index)
     upper = math.ceil(index)
 
     if lower == upper:
-        return round(values[lower], 1)
+        return round(
+            values[lower],
+            1
+        )
 
     result = (
         values[lower]
         +
-        (values[upper] - values[lower])
+        (
+            values[upper]
+            - values[lower]
+        )
         *
-        (index - lower)
+        (
+            index - lower
+        )
     )
 
-    return round(result, 1)
+    return round(
+        result,
+        1
+    )
 
 
 # ============================================================
@@ -493,30 +591,32 @@ def calculate_power_metrics(power):
         "average_watts": average(power),
         "max_watts": maximum(power),
         "min_watts": minimum(power),
-        "p95_watts": percentile(power, 0.95),
+        "p95_watts": percentile(
+            power,
+            0.95
+        ),
     }
 
     # --------------------------------------------------------
     # Puissance normalisée approximative
-    # --------------------------------------------------------
-    #
-    # Hypothèse :
-    # les données sont proches de 1 échantillon / seconde.
-    #
-    # Ce n'est PAS une NP officielle.
     # --------------------------------------------------------
 
     if len(power) >= 30:
 
         rolling = []
 
-        for i in range(29, len(power)):
+        for i in range(
+            29,
+            len(power)
+        ):
 
-            window = power[i - 29:i + 1]
+            window = power[
+                i - 29:i + 1
+            ]
 
-            rolling_average = mean(window)
-
-            rolling.append(rolling_average)
+            rolling.append(
+                mean(window)
+            )
 
         if rolling:
 
@@ -525,9 +625,13 @@ def calculate_power_metrics(power):
                 for value in rolling
             )
 
-            normalized_power = fourth_power_mean ** 0.25
+            normalized_power = (
+                fourth_power_mean ** 0.25
+            )
 
-            result["normalized_power_approx"] = round(
+            result[
+                "normalized_power_approx"
+            ] = round(
                 normalized_power,
                 1
             )
@@ -541,16 +645,26 @@ def calculate_power_metrics(power):
 
 def calculate_hr_metrics(heart_rate):
 
-    heart_rate = clean_numbers(heart_rate)
+    heart_rate = clean_numbers(
+        heart_rate
+    )
 
     if not heart_rate:
         return {}
 
     return {
-        "samples": len(heart_rate),
-        "average_bpm": average(heart_rate),
-        "max_bpm": maximum(heart_rate),
-        "min_bpm": minimum(heart_rate),
+        "samples": len(
+            heart_rate
+        ),
+        "average_bpm": average(
+            heart_rate
+        ),
+        "max_bpm": maximum(
+            heart_rate
+        ),
+        "min_bpm": minimum(
+            heart_rate
+        ),
         "p95_bpm": percentile(
             heart_rate,
             0.95
@@ -562,10 +676,12 @@ def calculate_hr_metrics(heart_rate):
 # ZONES DE PUISSANCE
 # ============================================================
 
-def calculate_power_zones(power, ftp=310):
+def calculate_power_zones(
+    power,
+    ftp=310
+):
     """
-    Répartition approximative des échantillons
-    dans les zones de puissance.
+    Zones approximatives basées sur FTP.
 
     Z1 : < 55 %
     Z2 : 55 - 75 %
@@ -597,31 +713,45 @@ def calculate_power_zones(power, ftp=310):
 
         if ratio < 0.55:
 
-            zones["Z1_recuperation"] += 1
+            zones[
+                "Z1_recuperation"
+            ] += 1
 
         elif ratio < 0.75:
 
-            zones["Z2_endurance"] += 1
+            zones[
+                "Z2_endurance"
+            ] += 1
 
         elif ratio < 0.90:
 
-            zones["Z3_tempo"] += 1
+            zones[
+                "Z3_tempo"
+            ] += 1
 
         elif ratio < 1.05:
 
-            zones["Z4_seuil"] += 1
+            zones[
+                "Z4_seuil"
+            ] += 1
 
         elif ratio < 1.20:
 
-            zones["Z5_vo2max"] += 1
+            zones[
+                "Z5_vo2max"
+            ] += 1
 
         elif ratio < 1.50:
 
-            zones["Z6_anaerobie"] += 1
+            zones[
+                "Z6_anaerobie"
+            ] += 1
 
         else:
 
-            zones["Z7_neuromusculaire"] += 1
+            zones[
+                "Z7_neuromusculaire"
+            ] += 1
 
     return zones
 
@@ -630,26 +760,21 @@ def calculate_power_zones(power, ftp=310):
 # DÉRIVE CARDIAQUE
 # ============================================================
 
-def calculate_hr_drift(power, heart_rate):
+def calculate_hr_drift(
+    power,
+    heart_rate
+):
     """
-    Estimation simple de la dérive cardiaque.
-
-    On compare le ratio puissance / FC entre :
-    - la première moitié ;
-    - la seconde moitié.
-
-    Formule :
-
-        ratio = puissance moyenne / FC moyenne
-
-        dérive = ((ratio_2 / ratio_1) - 1) * 100
-
-    Cette méthode reste approximative.
+    Compare le ratio puissance / FC entre
+    la première et la deuxième moitié
+    de la séance.
     """
 
     power = clean_numbers(power)
 
-    heart_rate = clean_numbers(heart_rate)
+    heart_rate = clean_numbers(
+        heart_rate
+    )
 
     length = min(
         len(power),
@@ -698,20 +823,30 @@ def calculate_hr_drift(power, heart_rate):
     )
 
     drift = (
-        (second_ratio / first_ratio)
+        (
+            second_ratio
+            / first_ratio
+        )
         - 1
     ) * 100
 
-    return round(drift, 1)
+    return round(
+        drift,
+        1
+    )
 
 
 # ============================================================
 # ANALYSE COMPLÈTE
 # ============================================================
 
-def generate_analysis(training, streams):
+def generate_analysis(
+    training,
+    streams
+):
     """
-    Génère l'analyse complète de la séance.
+    Génère l'analyse complète
+    de la séance.
     """
 
     # --------------------------------------------------------
@@ -730,6 +865,16 @@ def generate_analysis(training, streams):
 
     cadence = streams.get(
         "stream_cadence",
+        []
+    )
+
+    torque = streams.get(
+        "stream_torque",
+        []
+    )
+
+    pace = streams.get(
+        "stream_pace",
         []
     )
 
@@ -762,6 +907,14 @@ def generate_analysis(training, streams):
         cadence
     )
 
+    torque = clean_numbers(
+        torque
+    )
+
+    pace = clean_numbers(
+        pace
+    )
+
     altitude = clean_numbers(
         altitude
     )
@@ -775,28 +928,36 @@ def generate_analysis(training, streams):
     )
 
     # --------------------------------------------------------
-    # Calcul des métriques
+    # Métriques
     # --------------------------------------------------------
 
-    power_metrics = calculate_power_metrics(
-        power
+    power_metrics = (
+        calculate_power_metrics(
+            power
+        )
     )
 
-    hr_metrics = calculate_hr_metrics(
-        heart_rate
+    hr_metrics = (
+        calculate_hr_metrics(
+            heart_rate
+        )
     )
 
-    power_zones = calculate_power_zones(
-        power
+    power_zones = (
+        calculate_power_zones(
+            power
+        )
     )
 
-    hr_drift = calculate_hr_drift(
-        power,
-        heart_rate
+    hr_drift = (
+        calculate_hr_drift(
+            power,
+            heart_rate
+        )
     )
 
     # --------------------------------------------------------
-    # Objet principal
+    # Résultat principal
     # --------------------------------------------------------
 
     analysis = {
@@ -813,15 +974,21 @@ def generate_analysis(training, streams):
         "heart_rate_drift_percent": hr_drift,
     }
 
-    # --------------------------------------------------------
-    # Métriques supplémentaires
-    # --------------------------------------------------------
+    # ========================================================
+    # MÉTRIQUES SUPPLÉMENTAIRES
+    # ========================================================
 
     additional_metrics = {}
 
+    # --------------------------------------------------------
+    # Cadence
+    # --------------------------------------------------------
+
     if cadence:
 
-        additional_metrics["cadence"] = {
+        additional_metrics[
+            "cadence"
+        ] = {
             "average_rpm": average(
                 cadence
             ),
@@ -831,54 +998,128 @@ def generate_analysis(training, streams):
             "min_rpm": minimum(
                 cadence
             ),
-            "samples": len(cadence),
+            "samples": len(
+                cadence
+            ),
         }
+
+    # --------------------------------------------------------
+    # Couple
+    # --------------------------------------------------------
+
+    if torque:
+
+        additional_metrics[
+            "torque"
+        ] = {
+            "average": average(
+                torque
+            ),
+            "max": maximum(
+                torque
+            ),
+            "min": minimum(
+                torque
+            ),
+            "samples": len(
+                torque
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Allure
+    # --------------------------------------------------------
+
+    if pace:
+
+        additional_metrics[
+            "pace"
+        ] = {
+            "average": average(
+                pace
+            ),
+            "min": minimum(
+                pace
+            ),
+            "max": maximum(
+                pace
+            ),
+            "samples": len(
+                pace
+            ),
+        }
+
+    # --------------------------------------------------------
+    # Altitude
+    # --------------------------------------------------------
 
     if altitude:
 
-        additional_metrics["altitude"] = {
+        additional_metrics[
+            "altitude"
+        ] = {
             "min_m": minimum(
                 altitude
             ),
             "max_m": maximum(
                 altitude
             ),
+            "samples": len(
+                altitude
+            ),
         }
+
+    # --------------------------------------------------------
+    # Distance
+    # --------------------------------------------------------
 
     if distance_stream:
 
-        additional_metrics[
-            "distance_stream"
-        ] = {
-            "start": round(
-                distance_stream[0],
-                3
-            ),
-            "end": round(
-                distance_stream[-1],
-                3
-            ),
-        }
+        distance_meters = (
+            distance_stream[-1]
+            - distance_stream[0]
+        )
+
+        if distance_meters >= 0:
+
+            additional_metrics[
+                "distance"
+            ] = {
+                "meters": round(
+                    distance_meters,
+                    1
+                ),
+                "kilometers": round(
+                    distance_meters / 1000,
+                    3
+                ),
+            }
+
+    # --------------------------------------------------------
+    # Temps
+    # --------------------------------------------------------
 
     if time_stream:
 
-        additional_metrics[
-            "stream_time"
-        ] = {
-            "start": round(
-                time_stream[0],
-                2
-            ),
-            "end": round(
-                time_stream[-1],
-                2
-            ),
-            "duration_seconds": round(
-                time_stream[-1]
-                - time_stream[0],
-                2
-            ),
-        }
+        duration_seconds = (
+            time_stream[-1]
+            - time_stream[0]
+        )
+
+        if duration_seconds >= 0:
+
+            additional_metrics[
+                "duration"
+            ] = {
+                "seconds": round(
+                    duration_seconds,
+                    1
+                ),
+                "minutes": round(
+                    duration_seconds / 60,
+                    1
+                ),
+            }
 
     if additional_metrics:
 
@@ -890,7 +1131,10 @@ def generate_analysis(training, streams):
     # INFORMATIONS DE LA SÉANCE
     # ========================================================
 
-    if isinstance(training, dict):
+    if isinstance(
+        training,
+        dict
+    ):
 
         interesting_fields = [
             "id",
@@ -916,7 +1160,9 @@ def generate_analysis(training, streams):
 
             if field in training:
 
-                summary[field] = training[field]
+                summary[field] = (
+                    training[field]
+                )
 
         analysis[
             "training"
@@ -1056,16 +1302,22 @@ def analyse_derniere_seance():
         return error
 
     # --------------------------------------------------------
-    # Trouver la liste des séances
+    # Recherche de la liste
     # --------------------------------------------------------
 
     trainings = []
 
-    if isinstance(data, list):
+    if isinstance(
+        data,
+        list
+    ):
 
         trainings = data
 
-    elif isinstance(data, dict):
+    elif isinstance(
+        data,
+        dict
+    ):
 
         for key in [
             "results",
@@ -1110,7 +1362,7 @@ def analyse_derniere_seance():
         }), 500
 
     # --------------------------------------------------------
-    # ID de la séance
+    # ID séance
     # --------------------------------------------------------
 
     training_id = training.get(
@@ -1148,7 +1400,7 @@ def analyse_derniere_seance():
         return error
 
     # --------------------------------------------------------
-    # Transformation des streams
+    # Conversion des streams
     # --------------------------------------------------------
 
     streams = flatten_streams(
@@ -1180,7 +1432,7 @@ def analyse_derniere_seance():
 
 
 # ============================================================
-# LANCEMENT LOCAL
+# LANCEMENT
 # ============================================================
 
 if __name__ == "__main__":
