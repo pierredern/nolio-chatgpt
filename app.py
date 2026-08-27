@@ -689,6 +689,10 @@ def analyse_derniere_seance():
             "training": training
         }), 500
 
+
+training_id = training.get("nolio_id")
+
+if not training_id:
     training_id = training.get("id")
 
     if not training_id:
