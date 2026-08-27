@@ -644,7 +644,7 @@ def generate_analysis(training, streams):
 @app.route("/analyse/derniere-seance")
 def analyse_derniere_seance():
 
-    # 1. Récupérer les séances
+    # Récupérer les séances
     data, error = nolio_get(
         "/api/get/training/",
         params={"limit": 20}
@@ -653,10 +653,7 @@ def analyse_derniere_seance():
     if error:
         return error
 
-    # --------------------------------------------------------
     # Trouver la liste des séances
-    # --------------------------------------------------------
-
     trainings = []
 
     if isinstance(data, list):
@@ -675,35 +672,29 @@ def analyse_derniere_seance():
             "raw_training_response": data
         }), 404
 
-    # --------------------------------------------------------
-    # Prendre la première séance.
-    #
-    # On vérifiera ensuite l'ordre exact renvoyé par Nolio.
-    # --------------------------------------------------------
+    # Première séance
+    training = trainings[0]
 
-training = trainings[0]
+    if not isinstance(training, dict):
+        return jsonify({
+            "error": "Format de séance inattendu.",
+            "training": training
+        }), 500
 
-if not isinstance(training, dict):
-    return jsonify({
-        "error": "Format de séance inattendu.",
-        "training": training
-    }), 500
+    # Nolio utilise nolio_id
+    training_id = training.get("nolio_id")
 
-training_id = training.get("nolio_id")
+    # Sécurité : accepter aussi id si nécessaire
+    if not training_id:
+        training_id = training.get("id")
 
-if not training_id:
-    training_id = training.get("id")
+    if not training_id:
+        return jsonify({
+            "error": "Impossible de trouver l'identifiant de la séance.",
+            "training": training
+        }), 500
 
-if not training_id:
-    return jsonify({
-        "error": "Impossible de trouver l'identifiant de la séance.",
-        "training": training
-    }), 500
-
-    # --------------------------------------------------------
-    # 2. Récupérer les streams
-    # --------------------------------------------------------
-
+    # Récupérer les streams
     stream_data, error = nolio_get(
         "/api/get/training/streams/",
         params={"id": training_id}
@@ -712,6 +703,7 @@ if not training_id:
     if error:
         return error
 
+    # Transformer la réponse en dictionnaire de streams
     streams = flatten_streams(stream_data)
 
     if not streams:
@@ -721,18 +713,11 @@ if not training_id:
             "raw_stream_response": stream_data
         }), 404
 
-    # --------------------------------------------------------
-    # 3. Calculer l'analyse
-    # --------------------------------------------------------
-
+    # Calculer l'analyse
     analysis = generate_analysis(
         training,
         streams
     )
-
-    # --------------------------------------------------------
-    # 4. Retourner le résultat
-    # --------------------------------------------------------
 
     return jsonify(analysis)
 
