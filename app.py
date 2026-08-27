@@ -527,8 +527,8 @@ def generate_analysis(training, streams):
     Génère l'analyse de la séance.
     """
 
-    power = streams.get("stream_power", [])
-    heart_rate = streams.get("stream_heart_rate", [])
+power = streams.get("stream_watts", [])
+heart_rate = streams.get("stream_heartrate", [])
 
     power = clean_numbers(power)
     heart_rate = clean_numbers(heart_rate)
