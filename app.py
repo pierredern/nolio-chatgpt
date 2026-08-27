@@ -78,16 +78,7 @@ def callback():
 
     return redirect("/")
 
-
-```python
 def refresh_access_token():
-    """
-    Rafraîchit automatiquement le token Nolio.
-
-    Nolio fait tourner le refresh_token :
-    l'ancien refresh_token devient invalide après utilisation.
-    """
-
     refresh_token = session.get("refresh_token")
 
     if not refresh_token:
@@ -109,12 +100,52 @@ def refresh_access_token():
     )
 
     if response.status_code != 200:
-        # Le refresh token n'est plus utilisable.
         session.pop("access_token", None)
         session.pop("refresh_token", None)
         return False
 
     tokens = response.json()
+
+    session["access_token"] = tokens["access_token"]
+    session["refresh_token"] = tokens["refresh_token"]
+
+    return True
+
+
+def nolio_get(path, params=None):
+    access_token = session.get("access_token")
+
+    if not access_token:
+        return None, redirect("/login")
+
+    response = requests.get(
+        f"{BASE_URL}{path}",
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        },
+        params=params,
+        timeout=30,
+    )
+
+    if response.status_code == 401:
+
+        if not refresh_access_token():
+            return None, redirect("/login")
+
+        access_token = session.get("access_token")
+
+        response = requests.get(
+            f"{BASE_URL}{path}",
+            headers={
+                "Authorization": f"Bearer {access_token}"
+            },
+            params=params,
+            timeout=30,
+        )
+
+    response.raise_for_status()
+
+    return response.json(), None
 
     # IMPORTANT :
     # Nolio renvoie un nouveau refresh_token.
