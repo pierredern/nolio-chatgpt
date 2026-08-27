@@ -79,7 +79,61 @@ def callback():
     return redirect("/")
 
 
+```python
+def refresh_access_token():
+    """
+    Rafraîchit automatiquement le token Nolio.
+
+    Nolio fait tourner le refresh_token :
+    l'ancien refresh_token devient invalide après utilisation.
+    """
+
+    refresh_token = session.get("refresh_token")
+
+    if not refresh_token:
+        return False
+
+    credentials = f"{CLIENT_ID}:{CLIENT_SECRET}".encode()
+    basic_auth = base64.b64encode(credentials).decode()
+
+    response = requests.post(
+        f"{BASE_URL}/api/token/",
+        headers={
+            "Authorization": f"Basic {basic_auth}"
+        },
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        timeout=30,
+    )
+
+    if response.status_code != 200:
+        # Le refresh token n'est plus utilisable.
+        session.pop("access_token", None)
+        session.pop("refresh_token", None)
+        return False
+
+    tokens = response.json()
+
+    # IMPORTANT :
+    # Nolio renvoie un nouveau refresh_token.
+    session["access_token"] = tokens["access_token"]
+    session["refresh_token"] = tokens["refresh_token"]
+
+    return True
+
+
 def nolio_get(path, params=None):
+    """
+    Effectue une requête GET vers Nolio.
+
+    Si l'access_token est expiré :
+    1. on utilise le refresh_token ;
+    2. on récupère un nouveau access_token ;
+    3. on recommence automatiquement la requête.
+    """
+
     access_token = session.get("access_token")
 
     if not access_token:
@@ -94,12 +148,34 @@ def nolio_get(path, params=None):
         timeout=30,
     )
 
+    # --------------------------------------------------------
+    # Access token expiré
+    # --------------------------------------------------------
+
     if response.status_code == 401:
-        return None, ("Token expiré. Il faudra le rafraîchir.", 401)
+
+        refreshed = refresh_access_token()
+
+        if not refreshed:
+            return None, redirect("/login")
+
+        # Nouveau token
+        access_token = session.get("access_token")
+
+        # On rejoue automatiquement la requête
+        response = requests.get(
+            f"{BASE_URL}{path}",
+            headers={
+                "Authorization": f"Bearer {access_token}"
+            },
+            params=params,
+            timeout=30,
+        )
 
     response.raise_for_status()
 
     return response.json(), None
+
 
 
 @app.route("/user")
